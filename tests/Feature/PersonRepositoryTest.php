@@ -16,12 +16,12 @@
  */
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Webkul\Contact\Models\Organization;
 use Webkul\Contact\Models\Person;
 use Webkul\Contact\Repositories\PersonRepository;
 use Webkul\Installer\Database\Seeders\User\DatabaseSeeder as UserDatabaseSeeder;
 use Webkul\User\Models\User;
-use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -45,26 +45,26 @@ class PersonRepositoryTestReport
         ?string $error = null
     ): void {
         self::$results[] = [
-            'suite'       => $suite,
-            'test'        => $test,
-            'rule'        => $rule,
-            'bug'         => $bug,
+            'suite' => $suite,
+            'test' => $test,
+            'rule' => $rule,
+            'bug' => $bug,
             'criticality' => $criticality,
-            'status'      => $status,
+            'status' => $status,
             'duration_ms' => round($durationMs, 2),
-            'error'       => $error,
+            'error' => $error,
         ];
     }
 
     public static function generate(): string
     {
-        $total   = count(self::$results);
-        $passed  = count(array_filter(self::$results, fn ($r) => $r['status'] === 'PASS'));
-        $failed  = $total - $passed;
-        $rate    = $total > 0 ? round(($passed / $total) * 100, 1) : 0;
-        $now     = date('Y-m-d H:i:s');
+        $total = count(self::$results);
+        $passed = count(array_filter(self::$results, fn ($r) => $r['status'] === 'PASS'));
+        $failed = $total - $passed;
+        $rate = $total > 0 ? round(($passed / $total) * 100, 1) : 0;
+        $now = date('Y-m-d H:i:s');
 
-        $md  = "# Rapport de Tests Unitaires — PersonRepository\n\n";
+        $md = "# Rapport de Tests Unitaires — PersonRepository\n\n";
         $md .= "**Généré le :** {$now}\n\n";
         $md .= "## Résumé\n\n";
         $md .= "| Total | Réussis | Échoués | Taux de réussite |\n";
@@ -111,8 +111,8 @@ class PersonRepositoryTestReport
             mkdir($dir, 0777, true);
         }
 
-        $filename = 'person_repository_report_' . date('Y-m-d_His') . '.md';
-        $path     = $dir . DIRECTORY_SEPARATOR . $filename;
+        $filename = 'person_repository_report_'.date('Y-m-d_His').'.md';
+        $path = $dir.DIRECTORY_SEPARATOR.$filename;
 
         file_put_contents($path, self::generate());
 
@@ -132,15 +132,15 @@ function runAndRecord(
     string $criticality,
     callable $assertions
 ): void {
-    $start  = microtime(true);
+    $start = microtime(true);
     $status = 'PASS';
-    $error  = null;
+    $error = null;
 
     try {
         $assertions();
-    } catch (\Throwable $e) {
+    } catch (Throwable $e) {
         $status = 'FAIL';
-        $error  = $e->getMessage();
+        $error = $e->getMessage();
         throw $e; // on relance pour que Pest/PHPUnit marque bien le test comme échoué
     } finally {
         $durationMs = (microtime(true) - $start) * 1000;
@@ -175,7 +175,7 @@ describe('Sanitization & Unique ID Generation', function () {
     it('devrait convertir organization_id vide en null lors de la création', function () {
         runAndRecord(
             'Sanitization & Unique ID Generation',
-            "devrait convertir organization_id vide en null lors de la création",
+            'devrait convertir organization_id vide en null lors de la création',
             "Conversion d'organization_id vide en null",
             "Erreur d'intégrité SQL sur la clé étrangère organization_id",
             'CRITIQUE',
@@ -203,9 +203,9 @@ describe('Sanitization & Unique ID Generation', function () {
     it('devrait générer unique_id correct à partir de user_id, organization_id et du premier email', function () {
         runAndRecord(
             'Sanitization & Unique ID Generation',
-            "devrait générer unique_id correct à partir de user_id, organization_id et du premier email",
+            'devrait générer unique_id correct à partir de user_id, organization_id et du premier email',
             "Génération de l'unique_id composite (user_id|org_id|email)",
-            "Duplication physique de contacts due à un ID unique mal calculé",
+            'Duplication physique de contacts due à un ID unique mal calculé',
             'HAUTE',
             function () {
                 $org = Organization::create([
@@ -240,9 +240,9 @@ describe('Sanitization & Unique ID Generation', function () {
     it('devrait ajouter le premier contact_number valide à l unique_id', function () {
         runAndRecord(
             'Sanitization & Unique ID Generation',
-            "devrait ajouter le premier contact_number valide à l unique_id",
+            'devrait ajouter le premier contact_number valide à l unique_id',
             "Intégration du numéro de téléphone dans l'unique_id",
-            "Conflits de déduplication si deux contacts partagent le même email mais ont des téléphones différents",
+            'Conflits de déduplication si deux contacts partagent le même email mais ont des téléphones différents',
             'HAUTE',
             function () {
                 $data = [
@@ -271,9 +271,9 @@ describe('Sanitization & Unique ID Generation', function () {
     it('devrait filtrer les contact_numbers dont la valeur est nulle', function () {
         runAndRecord(
             'Sanitization & Unique ID Generation',
-            "devrait filtrer les contact_numbers dont la valeur est nulle",
-            "Nettoyage des numéros de téléphone nuls (sanitize)",
-            "Stockage de valeurs nulles ou vides dans la structure JSON de contact_numbers",
+            'devrait filtrer les contact_numbers dont la valeur est nulle',
+            'Nettoyage des numéros de téléphone nuls (sanitize)',
+            'Stockage de valeurs nulles ou vides dans la structure JSON de contact_numbers',
             'MOYENNE',
             function () {
                 $data = [
@@ -310,7 +310,7 @@ describe('Organization Fetching & Creation', function () {
     it('devrait réutiliser une organisation existante si elle est trouvée par son nom', function () {
         runAndRecord(
             'Organization Fetching & Creation',
-            "devrait réutiliser une organisation existante si elle est trouvée par son nom",
+            'devrait réutiliser une organisation existante si elle est trouvée par son nom',
             "Réutilisation d'une organisation existante par nom",
             "Doublons d'organisations en base lors de l'enregistrement de contacts de la même entreprise",
             'HAUTE',
@@ -336,7 +336,7 @@ describe('Organization Fetching & Creation', function () {
     it('devrait créer une nouvelle organisation si elle n existe pas encore', function () {
         runAndRecord(
             'Organization Fetching & Creation',
-            "devrait créer une nouvelle organisation si elle n existe pas encore",
+            'devrait créer une nouvelle organisation si elle n existe pas encore',
             "Création d'une nouvelle organisation à la volée",
             "Échec de la liaison avec l'organisation lors de l'ajout d'un contact d'une nouvelle entreprise",
             'HAUTE',
@@ -364,33 +364,33 @@ describe('Statistics and Reporting', function () {
     it('devrait renvoyer le nombre correct de personnes créées dans un intervalle de dates', function () {
         runAndRecord(
             'Statistics and Reporting',
-            "devrait renvoyer le nombre correct de personnes créées dans un intervalle de dates",
-            "Comptabilisation correcte des nouveaux contacts dans un intervalle de temps",
-            "Indicateurs du tableau de bord erronés (statistiques clients fausses)",
+            'devrait renvoyer le nombre correct de personnes créées dans un intervalle de dates',
+            'Comptabilisation correcte des nouveaux contacts dans un intervalle de temps',
+            'Indicateurs du tableau de bord erronés (statistiques clients fausses)',
             'MOYENNE',
             function () {
                 $p1 = Person::create([
-                    'name'      => 'P1',
-                    'emails'    => [['value' => 'p1@test.com']],
-                    'user_id'   => $this->admin->id,
+                    'name' => 'P1',
+                    'emails' => [['value' => 'p1@test.com']],
+                    'user_id' => $this->admin->id,
                     'unique_id' => '1',
                 ]);
                 DB::table('persons')->where('id', $p1->id)
                     ->update(['created_at' => '2026-06-01 10:00:00']);
 
                 $p2 = Person::create([
-                    'name'      => 'P2',
-                    'emails'    => [['value' => 'p2@test.com']],
-                    'user_id'   => $this->admin->id,
+                    'name' => 'P2',
+                    'emails' => [['value' => 'p2@test.com']],
+                    'user_id' => $this->admin->id,
                     'unique_id' => '2',
                 ]);
                 DB::table('persons')->where('id', $p2->id)
                     ->update(['created_at' => '2026-06-15 10:00:00']);
 
                 $p3 = Person::create([
-                    'name'      => 'P3',
-                    'emails'    => [['value' => 'p3@test.com']],
-                    'user_id'   => $this->admin->id,
+                    'name' => 'P3',
+                    'emails' => [['value' => 'p3@test.com']],
+                    'user_id' => $this->admin->id,
                     'unique_id' => '3',
                 ]);
                 DB::table('persons')->where('id', $p3->id)
