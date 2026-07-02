@@ -1,0 +1,290 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - '2.*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  PHP_VERSION: '8.3'
+  NODE_VERSION: '22'
+  APP_ENV: testing
+  APP_DEBUG: false
+  FORCE_COLOR: 1
+
+jobs:
+  source-integrity:
+    name: Source Integrity
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify repository state
+        run: |
+          git status --short
+          git fsck --no-progress
+
+  build-test-quality:
+    name: Build, Tests and Quality
+    runs-on: ubuntu-latest
+    needs: source-integrity
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: krayin
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: curl, fileinfo, gd, intl, mbstring, openssl, pdo, pdo_mysql, tokenizer, zip
+          coverage: xdebug
+          tools: composer:v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Prepare Laravel environment
+        run: |
+          cp .env.example .env
+          sed -i "s|^APP_ENV=.*|APP_ENV=testing|" .env
+          sed -i "s|^APP_DEBUG=.*|APP_DEBUG=false|" .env
+          sed -i "s|^APP_URL=.*|APP_URL=http://127.0.0.1:8000|" .env
+          sed -i "s|^DB_HOST=.*|DB_HOST=127.0.0.1|" .env
+          sed -i "s|^DB_PORT=.*|DB_PORT=3306|" .env
+          sed -i "s|^DB_DATABASE=.*|DB_DATABASE=krayin|" .env
+          sed -i "s|^DB_USERNAME=.*|DB_USERNAME=root|" .env
+          sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=root|" .env
+          php artisan key:generate
+
+      - name: Install Krayin database
+        run: php artisan krayin-crm:install --skip-env-check --skip-admin-creation
+
+      - name: Run PHP style check
+        run: ./vendor/bin/pint --test
+
+      - name: Run frontend build
+        run: npm run build
+
+      - name: Run Pest tests with reports
+        run: |
+          mkdir -p reports/tests coverage
+          php artisan test --compact --coverage-clover=coverage/clover.xml --log-junit=reports/tests/junit.xml
+
+      - name: Upload build and test reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-test-quality-reports
+          path: |
+            reports/tests/junit.xml
+            coverage/clover.xml
+            public/build/manifest.json
+
+  sonar:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest
+    needs: build-test-quality
+    if: ${{ vars.SONAR_HOST_URL != '' }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download test reports
+        uses: actions/download-artifact@v4
+        with:
+          name: build-test-quality-reports
+
+      - name: SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+  security-static:
+    name: SAST, Secrets and Dependency Audit
+    runs-on: ubuntu-latest
+    needs: source-integrity
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: curl, fileinfo, gd, intl, mbstring, openssl, pdo, pdo_mysql, tokenizer, zip
+          tools: composer:v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+          npm ci
+
+      - name: Composer audit
+        continue-on-error: true
+        run: |
+          mkdir -p reports/security
+          composer audit --format=json > reports/security/composer-audit.json
+
+      - name: npm audit
+        continue-on-error: true
+        run: npm audit --json > reports/security/npm-audit.json
+
+      - name: Secret scan with Gitleaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Semgrep SAST
+        continue-on-error: true
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: p/php
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Filesystem vulnerability scan with Trivy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: reports/security/trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: reports/security/trivy-results.sarif
+
+      - name: Upload static security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: static-security-reports
+          path: reports/security
+
+  dast:
+    name: DAST Baseline
+    runs-on: ubuntu-latest
+    needs: build-test-quality
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: krayin
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: curl, fileinfo, gd, intl, mbstring, openssl, pdo, pdo_mysql, tokenizer, zip
+          tools: composer:v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies and build
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+          npm ci
+          npm run build
+
+      - name: Prepare Laravel test deployment
+        run: |
+          cp .env.example .env
+          sed -i "s|^APP_ENV=.*|APP_ENV=testing|" .env
+          sed -i "s|^APP_DEBUG=.*|APP_DEBUG=false|" .env
+          sed -i "s|^APP_URL=.*|APP_URL=http://127.0.0.1:8000|" .env
+          sed -i "s|^DB_HOST=.*|DB_HOST=127.0.0.1|" .env
+          sed -i "s|^DB_PORT=.*|DB_PORT=3306|" .env
+          sed -i "s|^DB_DATABASE=.*|DB_DATABASE=krayin|" .env
+          sed -i "s|^DB_USERNAME=.*|DB_USERNAME=root|" .env
+          sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=root|" .env
+          php artisan key:generate
+          php artisan krayin-crm:install --skip-env-check --skip-admin-creation
+          php artisan serve --host=127.0.0.1 --port=8000 > laravel-server.log 2>&1 &
+          timeout 60 bash -c 'until curl -fsS http://127.0.0.1:8000 >/dev/null; do sleep 2; done'
+
+      - name: OWASP ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: http://127.0.0.1:8000
+          cmd_options: '-a -r zap-report.html -J zap-report.json'
+          fail_action: false
+
+      - name: Upload DAST reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dast-reports
+          path: |
+            zap-report.html
+            zap-report.json
+            laravel-server.log
